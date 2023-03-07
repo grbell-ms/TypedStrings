@@ -2,9 +2,6 @@
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using System;
-using System.CodeDom.Compiler;
-using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Text;
 using System.Threading;
 
@@ -13,7 +10,7 @@ namespace TypedStrings
     [Generator]
     public sealed class Generator : IIncrementalGenerator
     {
-        private const string AttributeName = $"{nameof(TypedStrings)}.{nameof(TypedStringAttribute)}";
+        private const string AttributeName = $"{nameof(TypedStrings)}.TypedStringAttribute";
         private static readonly string s_generatedCodeAttribute = $"[global::System.CodeDom.Compiler.GeneratedCodeAttribute(\"{typeof(Generator).Assembly.GetName().Name}\", \"{typeof(Generator).Assembly.GetName().Version}\")]";
 
         public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -26,6 +23,23 @@ namespace TypedStrings
                 .Where(x => x is not null)!;
 
             context.RegisterSourceOutput(typedStringStructs, EmitSourceFile);
+            context.RegisterPostInitializationOutput(InjectTypedStringAttribute);
+        }
+
+        private void InjectTypedStringAttribute(IncrementalGeneratorPostInitializationContext obj)
+        {
+            obj.AddSource("TypedStringAttribute",
+@"
+namespace TypedStrings
+{
+    public sealed class TypedStringAttribute : global::System.Attribute
+    {
+        public global::System.Type Comparer { get; }
+
+        public TypedStringAttribute(global::System.Type comparer) => Comparer = comparer;
+    }
+}
+");
         }
 
         private static void GenType(TypedStringStruct tss, StringBuilder sb)
@@ -99,36 +113,28 @@ namespace {tss.Namespace}
 
         private static TypedStringStruct? GetSemanticTargetForGeneration(GeneratorAttributeSyntaxContext context, CancellationToken cancellationToken)
         {
-            var classDef = (ClassDeclarationSyntax)context.TargetNode;
-            NamespaceDeclarationSyntax? ns = classDef.Parent as NamespaceDeclarationSyntax;
-            if (ns is null)
+            var structDef = (StructDeclarationSyntax)context.TargetNode;
+            NamespaceDeclarationSyntax? ns = structDef.Parent as NamespaceDeclarationSyntax;
+            if (ns is null && structDef.Parent is not CompilationUnitSyntax)
             {
-                if (classDef.Parent is not CompilationUnitSyntax)
-                {
-                    // since this generator doesn't know how to generate a nested type...
-                    return null;
-                }
+                // since this generator doesn't know how to generate a nested type...
+                return null;
             }
-
-            TypedStringStruct? eventSourceClass = null;
 
             foreach (AttributeData attribute in context.TargetSymbol.GetAttributes())
             {
-                if (attribute.AttributeClass?.Name != $"{nameof(TypedStringAttribute)}" ||
-                    attribute.AttributeClass.ToDisplayString() != AttributeName || 
-                    attribute.ConstructorArguments.IsDefaultOrEmpty ||
-                    attribute.ConstructorArguments[0].Value is not Type comparerType)
+                if ((attribute.AttributeClass?.Name) == "TypedStringAttribute" &&
+                    attribute.AttributeClass.ToDisplayString() == AttributeName &&
+                    !attribute.ConstructorArguments.IsDefaultOrEmpty &&
+                    attribute.ConstructorArguments[0].Value is Type comparerType)
                 {
-                    continue;
+                    var nspace = ConstructNamespace(ns);
+                    string structName = structDef.Identifier.ValueText;
+                    return new TypedStringStruct(nspace, structName, comparerType.FullName);
                 }
-
-                var nspace = ConstructNamespace(ns);
-                string structName = classDef.Identifier.ValueText;
-                eventSourceClass = new TypedStringStruct(nspace, structName, comparerType.FullName);
-                break;
             }
 
-            return eventSourceClass;
+            return null;
         }
 
         private static string ConstructNamespace(NamespaceDeclarationSyntax? ns)
@@ -151,24 +157,5 @@ namespace {tss.Namespace}
             return nspace;
         }
 
-    }
-
-    internal record TypedStringStruct(string Namespace, string StructName, string ComparerFullName)
-    {
-    }
-
-    public sealed class TypedStringAttribute : Attribute
-    {
-        public Type Comparer { get; }
-
-        public TypedStringAttribute(Type comparer) => Comparer = comparer;
-    }
-}
-
-
-namespace System.Runtime.CompilerServices
-{
-    internal static class IsExternalInit
-    {
     }
 }
