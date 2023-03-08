@@ -1,8 +1,6 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Newtonsoft.Json.Linq;
 using System.Reflection;
-using Tests;
 using TypedStrings;
 
 namespace Tests
